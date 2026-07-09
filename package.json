@@ -13,20 +13,19 @@
     "build": "directus-extension build",
     "dev": "directus-extension build -w --no-minify",
     "test": "vitest",
-    "test:run": "vitest run",
-    "prepare": "directus-extension build"
+    "test:run": "vitest run"
   },
   "devDependencies": {
-    "vitest": "^4.0.0"
-  },
-  "dependencies": {
-    "ioredis": "^5.10.1",
-    "nodemailer": "^8.0.7",
-    "zod": "^4.4.3",
+    "vitest": "^4.0.0",
     "@directus/extensions-sdk": "^17.1.4",
     "@types/express": "^5.0.6",
     "@types/node": "^25.6.0",
     "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "ioredis": "^5.10.1",
+    "nodemailer": "^8.0.7",
+    "zod": "^4.4.3"
   },
   "overrides": {
     "@unhead/vue": "^3.1.0",
