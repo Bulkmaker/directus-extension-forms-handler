@@ -1,6 +1,8 @@
 name: Release
-# Тег vX.Y.Z → собрать dist → закоммитить в main → переставить тег на этот коммит.
-# Гарантирует, что tarball по тегу содержит собранный dist.
+# Тег vX.Y.Z → убедиться, что в main лежит dist, собранный из АКТУАЛЬНОГО src,
+# и переставить тег на этот dist-коммит. Гарантирует: tarball по тегу = свежий dist.
+# Без rebase: сгенерированные dist-файлы конфликтуют при ребейзе с параллельным
+# build.yml — вместо этого reset на свежий origin/main + rebuild + commit-если-отличается.
 on:
   push:
     tags: ['v*']
@@ -18,24 +20,25 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install --no-audit --no-fund
-      - run: npm run build
-      - name: commit dist + move tag to dist commit
+      - name: build dist от свежего main + переставить тег (с ретраями против гонки с build.yml)
         run: |
           git config user.name "CI"
           git config user.email "ci@bulkmaker.local"
-          git add -f dist
-          git commit -m "build: dist for ${GITHUB_REF_NAME} [skip ci]" || echo "dist unchanged"
-          # build.yml по push в main тоже коммитит dist → возможна гонка за push.
-          # Ребейзим на свежий main и ретраим, пока push не пройдёт.
-          pushed=0
+          ok=0
           for i in 1 2 3 4 5; do
             git fetch origin main
-            if ! git rebase origin/main; then git rebase --abort; sleep 3; continue; fi
-            if git push origin HEAD:main; then pushed=1; break; fi
-            echo "push main конфликт — ретрай $i"; sleep 3
+            git reset --hard origin/main
+            npm install --no-audit --no-fund
+            npm run build
+            git add -f dist
+            if git diff --cached --quiet; then
+              echo "dist в main уже актуален (собран build.yml)"
+              ok=1; break
+            fi
+            git commit -m "build: dist for ${GITHUB_REF_NAME} [skip ci]"
+            if git push origin HEAD:main; then ok=1; break; fi
+            echo "push отклонён (параллельный build.yml) — ретрай $i"; sleep 5
           done
-          if [ "$pushed" != "1" ]; then echo "::error::не удалось запушить dist в main после ретраев"; exit 1; fi
-          # Тег ставим на итоговый dist-коммит (force — тег уже существует от пуша).
+          [ "$ok" = "1" ] || { echo "::error::не удалось согласовать dist в main"; exit 1; }
           git tag -f "${GITHUB_REF_NAME}"
           git push -f origin "${GITHUB_REF_NAME}"
