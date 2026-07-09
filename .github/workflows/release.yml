@@ -1,0 +1,31 @@
+name: Release
+# Тег vX.Y.Z → собрать dist → закоммитить в main → переставить тег на этот коммит.
+# Гарантирует, что tarball по тегу содержит собранный dist.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-audit --no-fund
+      - run: npm run build
+      - name: commit dist + move tag to dist commit
+        run: |
+          git config user.name "CI"
+          git config user.email "ci@bulkmaker.local"
+          git add -f dist
+          git commit -m "build: dist for ${GITHUB_REF_NAME} [skip ci]" || echo "dist unchanged"
+          git push origin HEAD:main
+          git tag -f "${GITHUB_REF_NAME}"
+          git push -f origin "${GITHUB_REF_NAME}"
