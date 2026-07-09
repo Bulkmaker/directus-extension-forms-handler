@@ -40,5 +40,10 @@ jobs:
             echo "push отклонён (параллельный build.yml) — ретрай $i"; sleep 5
           done
           [ "$ok" = "1" ] || { echo "::error::не удалось согласовать dist в main"; exit 1; }
-          git tag -f "${GITHUB_REF_NAME}"
-          git push -f origin "${GITHUB_REF_NAME}"
+          case "${GITHUB_REF_NAME}" in
+            v*)
+              git tag -f "${GITHUB_REF_NAME}"
+              git push -f origin "${GITHUB_REF_NAME}"
+              ;;
+            *) echo "ref ${GITHUB_REF_NAME} — не тег v*, перестановку тега пропускаю (workflow_dispatch)";;
+          esac
