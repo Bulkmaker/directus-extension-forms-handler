@@ -27,11 +27,18 @@ export const timeCheckModule: AntispamModule = {
     const minTimeMs = config.timeCheck.minSeconds * 1000
     const maxTimeMs = 24 * 60 * 60 * 1000 // 24 hours
 
-    // Сначала проверяем «нереальные» времена — fillTimeMs<0 (форма из
-    // будущего, расхождение часов) или > 24ч (давний tab). Иначе нижний
-    // branch (< minTimeMs) перехватывал бы и отрицательные с менее
-    // информативным сообщением.
-    if (fillTimeMs < 0 || fillTimeMs > maxTimeMs) {
+    // Часы клиента могут спешить относительно сервера (Windows без NTP,
+    // dual-boot, старые Android) — тогда _loadTime приходит «из будущего»
+    // на секунды-минуты, и без допуска такой посетитель НЕ отправит форму
+    // никогда (подтверждено на бриф-форме render-room, 2026-09-05).
+    // Допуск 5 минут: диапазон [-5 мин, 0) пропускаем — сигнала о боте нет.
+    const clockSkewMs = 5 * 60 * 1000
+
+    // Сначала проверяем «нереальные» времена — сильно отрицательные (часы
+    // врут больше допуска) или > 24ч (давний tab). Иначе нижний branch
+    // (< minTimeMs) перехватывал бы и отрицательные с менее информативным
+    // сообщением.
+    if (fillTimeMs < -clockSkewMs || fillTimeMs > maxTimeMs) {
       return {
         passed: false,
         reason: 'Invalid form load time',
@@ -39,7 +46,7 @@ export const timeCheckModule: AntispamModule = {
       }
     }
 
-    if (fillTimeMs < minTimeMs) {
+    if (fillTimeMs >= 0 && fillTimeMs < minTimeMs) {
       return {
         passed: false,
         reason: `Form submitted too fast (${Math.round(fillTimeMs / 1000)}s < ${config.timeCheck.minSeconds}s minimum)`,

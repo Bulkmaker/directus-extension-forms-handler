@@ -53,9 +53,17 @@ describe('timeCheckModule', () => {
     expect(r.passed).toBe(true)
   })
 
-  it('блочит loadTime из будущего (отрицательный fillTime) как Invalid', async () => {
+  it('пропускает небольшой clock-skew (часы клиента спешат ≤5 мин)', async () => {
+    // У части посетителей часы спешат (Windows без NTP, dual-boot) — _loadTime
+    // приходит «из будущего». Без допуска такие люди не отправят форму никогда.
     const now = Date.now()
     const r = await timeCheckModule.validate(fakeReq, { _loadTime: now + 10_000 }, config)
+    expect(r.passed).toBe(true)
+  })
+
+  it('блочит loadTime из будущего сильнее допуска (>5 мин) как Invalid', async () => {
+    const now = Date.now()
+    const r = await timeCheckModule.validate(fakeReq, { _loadTime: now + 6 * 60_000 }, config)
     expect(r.passed).toBe(false)
     expect(r.reason).toMatch(/Invalid form load time/)
   })
