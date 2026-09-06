@@ -1,6 +1,6 @@
 {
   "name": "directus-extension-forms-handler",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Form submissions endpoint with modular antispam protection",
   "type": "module",
   "directus:extension": {

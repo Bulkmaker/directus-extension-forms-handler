@@ -1,6 +1,12 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { Request } from 'express'
-import { rateLimitModule, rateLimitStore } from '../rate-limit.js'
+import {
+  rateLimitModule,
+  rateLimitStore,
+  sweepRateLimitStore,
+  stopRateLimitSweep,
+  MAX_STORE_ENTRIES,
+} from '../rate-limit.js'
 import { getClientIp } from '../../shared.js'
 import type { AntispamConfig } from '../types.js'
 
@@ -105,5 +111,100 @@ describe('rateLimitModule', () => {
 
     expect(rateLimitStore.has('7.7.7.7')).toBe(true)
     expect(rateLimitStore.has('127.0.0.1')).toBe(false)
+  })
+})
+
+describe('sweep in-memory стора (защита от роста Map → OOM)', () => {
+  beforeEach(() => {
+    rateLimitStore.clear()
+  })
+
+  afterEach(() => {
+    stopRateLimitSweep()
+    rateLimitStore.clear()
+  })
+
+  it('удаляет записи с истёкшим окном и не трогает живые', async () => {
+    for (const ip of ['10.0.0.1', '10.0.0.2', '10.0.0.3']) {
+      await rateLimitModule.validate(makeReq({ ip }), {}, config)
+    }
+    expect(rateLimitStore.size).toBe(3)
+
+    rateLimitStore.get('10.0.0.1')!.resetAt = Date.now() - 1000
+    rateLimitStore.get('10.0.0.2')!.resetAt = Date.now() - 1
+
+    expect(sweepRateLimitStore()).toBe(2)
+    expect(rateLimitStore.size).toBe(1)
+    expect(rateLimitStore.has('10.0.0.3')).toBe(true)
+  })
+
+  it('ротация IP не растит стор бесконечно: после sweep остаётся 0 записей', async () => {
+    for (let i = 0; i < 500; i++) {
+      await rateLimitModule.validate(makeReq({ ip: `172.16.${Math.floor(i / 256)}.${i % 256}` }), {}, config)
+    }
+    expect(rateLimitStore.size).toBe(500)
+
+    // все окна истекли
+    const future = Date.now() + config.rateLimit.windowMs + 1
+    expect(sweepRateLimitStore(future)).toBe(500)
+    expect(rateLimitStore.size).toBe(0)
+  })
+
+  it('держит жёсткий потолок размера даже без sweep-тика', async () => {
+    const now = Date.now()
+    // Заполняем стор мимо validate — окна ещё живые, sweep их не удалит.
+    for (let i = 0; i < MAX_STORE_ENTRIES + 10; i++) {
+      rateLimitStore.set(`fill-${i}`, { count: 1, resetAt: now + 60_000 + i })
+    }
+
+    await rateLimitModule.validate(makeReq({ ip: '192.168.0.1' }), {}, config)
+
+    expect(rateLimitStore.size).toBeLessThanOrEqual(MAX_STORE_ENTRIES + 1)
+    expect(rateLimitStore.has('192.168.0.1')).toBe(true)
+  })
+
+  it('sweep-таймер создаётся один раз и unref-ится (не держит процесс живым)', async () => {
+    stopRateLimitSweep()
+
+    const unref = vi.fn()
+    const spy = vi.spyOn(globalThis, 'setInterval').mockReturnValue({ unref } as never)
+
+    try {
+      await rateLimitModule.validate(makeReq({ ip: '203.0.113.1' }), {}, config)
+      await rateLimitModule.validate(makeReq({ ip: '203.0.113.2' }), {}, config)
+
+      expect(spy).toHaveBeenCalledTimes(1)
+      expect(unref).toHaveBeenCalledTimes(1)
+    }
+    finally {
+      spy.mockRestore()
+      stopRateLimitSweep()
+    }
+  })
+
+  it('тик таймера чистит истёкшие записи', async () => {
+    stopRateLimitSweep()
+
+    let tick: (() => void) | null = null
+    const spy = vi
+      .spyOn(globalThis, 'setInterval')
+      .mockImplementation((fn: any) => {
+        tick = fn
+        return { unref: () => {} } as never
+      })
+
+    try {
+      await rateLimitModule.validate(makeReq({ ip: '198.51.100.7' }), {}, config)
+      rateLimitStore.get('198.51.100.7')!.resetAt = Date.now() - 1
+
+      expect(tick).toBeTypeOf('function')
+      tick!()
+
+      expect(rateLimitStore.size).toBe(0)
+    }
+    finally {
+      spy.mockRestore()
+      stopRateLimitSweep()
+    }
   })
 })

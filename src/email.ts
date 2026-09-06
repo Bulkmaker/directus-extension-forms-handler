@@ -3,6 +3,7 @@ import {
   type DirectusContext,
   type ResolvedAttachment,
   escapeHtml,
+  escapeHtmlAttr,
   getFormTypeLabel,
   extractCustomFields,
   resolveAttachmentUrls,
@@ -185,7 +186,7 @@ function buildContactsSection(data: FormData): string {
   rows += fieldRow('Имя', escapeHtml(data.name))
   rows += fieldRow('Телефон', escapeHtml(data.phone))
   if (data.email) {
-    rows += fieldRow('Email', `<a href="mailto:${escapeHtml(data.email)}" style="color:${COLOR_PRIMARY};text-decoration:none;">${escapeHtml(data.email)}</a>`)
+    rows += fieldRow('Email', `<a href="mailto:${escapeHtmlAttr(data.email)}" style="color:${COLOR_PRIMARY};text-decoration:none;">${escapeHtml(data.email)}</a>`)
   }
   return sectionHeading('Контакты') + rows
 }
@@ -225,8 +226,8 @@ function buildAttachmentsSection(prepared: PreparedAttachment[]): string {
     for (const item of images) {
       imgCells +=
         `<td style="padding:6px;vertical-align:top;" valign="top">` +
-        `<a href="${escapeHtml(item.attachment.url)}" target="_blank" style="text-decoration:none;">` +
-        `<img src="cid:${item.cid}" alt="${escapeHtml(item.attachment.name)}" ` +
+        `<a href="${escapeHtmlAttr(item.attachment.url)}" target="_blank" style="text-decoration:none;">` +
+        `<img src="cid:${item.cid}" alt="${escapeHtmlAttr(item.attachment.name)}" ` +
         `style="display:block;max-width:260px;width:100%;height:auto;border-radius:8px;border:1px solid ${COLOR_BORDER};" />` +
         `</a>` +
         `</td>`
@@ -241,7 +242,7 @@ function buildAttachmentsSection(prepared: PreparedAttachment[]): string {
     rows +=
       `<tr><td style="padding:4px 24px;font-family:${FONT_STACK};font-size:14px;color:${COLOR_TEXT};line-height:1.5;">` +
       `&#x1F4CE; ${escapeHtml(item.attachment.name)} &mdash; ` +
-      `<a href="${escapeHtml(item.attachment.url)}" style="color:${COLOR_PRIMARY};text-decoration:none;" target="_blank">Скачать</a>` +
+      `<a href="${escapeHtmlAttr(item.attachment.url)}" style="color:${COLOR_PRIMARY};text-decoration:none;" target="_blank">Скачать</a>` +
       `</td></tr>`
   }
 
@@ -283,7 +284,7 @@ function buildProjectSection(data: FormData, sourceUrl?: string): string {
 
   const text = `${escapeHtml(label)}${escapeHtml(size)}`
   const link = sourceUrl
-    ? `<a href="${escapeHtml(sourceUrl)}" style="color:${COLOR_PRIMARY};text-decoration:none;font-weight:600;" target="_blank">${text}</a>`
+    ? `<a href="${escapeHtmlAttr(sourceUrl)}" style="color:${COLOR_PRIMARY};text-decoration:none;font-weight:600;" target="_blank">${text}</a>`
     : `<strong>${text}</strong>`
 
   return divider()
@@ -297,7 +298,7 @@ function buildSourceSection(sourceUrl?: string): string {
 
   return divider()
     + `<tr><td style="padding:12px 24px;font-family:${FONT_STACK};font-size:14px;color:${COLOR_MUTED};line-height:1.5;">` +
-    `&#x1F517; Страница: <a href="${escapeHtml(sourceUrl)}" style="color:${COLOR_PRIMARY};text-decoration:none;" target="_blank">${escapeHtml(sourceUrl)}</a>` +
+    `&#x1F517; Страница: <a href="${escapeHtmlAttr(sourceUrl)}" style="color:${COLOR_PRIMARY};text-decoration:none;" target="_blank">${escapeHtml(sourceUrl)}</a>` +
     `</td></tr>`
 }
 

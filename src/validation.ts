@@ -47,6 +47,24 @@ const legacySchema = z.discriminatedUnion('type', [
   legacyCalculatorSchema,
 ])
 
+const MAX_ATTACHMENT_URL_LENGTH = 500
+
+/**
+ * Ссылка на вложение печатается в уведомления (Telegram/VK/email), поэтому
+ * формат проверяем строго: валидный URL, только http(s), не длиннее 500 символов.
+ *
+ * `.catch(undefined)` — намеренно: кривая ссылка НЕ должна отправлять в отказ
+ * всю заявку (лид дороже ссылки на файл). Такое вложение уедет без URL, имя
+ * и id останутся, менеджер найдёт файл в CMS.
+ */
+const attachmentUrlSchema = z
+  .string()
+  .max(MAX_ATTACHMENT_URL_LENGTH, `Ссылка на вложение длиннее ${MAX_ATTACHMENT_URL_LENGTH} символов`)
+  .url('Неверный формат ссылки на вложение')
+  .refine(value => /^https?:\/\//i.test(value), 'Ссылка на вложение должна быть http(s)')
+  .optional()
+  .catch(undefined)
+
 const attachmentSchema = z
   .object({
     field: z.string().optional(),
@@ -55,7 +73,7 @@ const attachmentSchema = z
     mimeType: z.string().optional(),
     status: z.enum(['uploaded', 'failed']).optional(),
     id: z.string().optional(),
-    url: z.string().optional(),
+    url: attachmentUrlSchema,
     reason: z.string().optional(),
   })
   .passthrough()

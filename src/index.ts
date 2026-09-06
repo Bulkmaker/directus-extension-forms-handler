@@ -65,13 +65,16 @@ export default {
         return res.status(201).json({ success: true, id: 'fake-' + Date.now() })
       }
 
-      // Regular reject
+      // Regular reject.
+      // Причины антиспама наружу НЕ отдаём: в них параметры защиты
+      // («5 requests per 60s», «1s < 3s minimum») — по ним спамер калибрует обход.
+      // Детали остаются в серверном логе. Ошибки ВАЛИДАЦИИ полей (ниже) клиенту
+      // по-прежнему возвращаются: их показывает пользователю форма.
       if (!antispamResult.passed) {
-        console.log(`[forms-handler] Antispam failed for IP: ${ip}`, antispamResult.errors)
+        console.warn(`[forms-handler] Antispam failed for IP: ${ip}`, antispamResult.errors)
         return res.status(400).json({
           success: false,
           error: 'Проверка безопасности не пройдена',
-          details: antispamResult.errors,
         })
       }
 

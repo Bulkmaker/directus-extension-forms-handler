@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   isImageMimeType,
   escapeHtml,
+  escapeHtmlAttr,
   formatUnknownValue,
   getFormTypeLabel,
   extractCustomFields,
@@ -50,6 +51,22 @@ describe('escapeHtml', () => {
   it('экранирует <, >, & (XSS-prevention)', () => {
     expect(escapeHtml('<script>alert("x")</script>')).toBe('&lt;script&gt;alert("x")&lt;/script&gt;')
     expect(escapeHtml('A & B')).toBe('A &amp; B')
+  })
+})
+
+describe('escapeHtmlAttr', () => {
+  it('экранирует кавычки — нельзя выйти из href="..."', () => {
+    const escaped = escapeHtmlAttr('https://ok.example/" onmouseover="x')
+    expect(escaped).not.toContain('"')
+    expect(escaped).toContain('&quot;')
+  })
+
+  it('одинарные кавычки тоже экранируются', () => {
+    expect(escapeHtmlAttr("https://ok.example/'")).toBe('https://ok.example/&#39;')
+  })
+
+  it('делает всё, что делает escapeHtml', () => {
+    expect(escapeHtmlAttr('<a>&')).toBe('&lt;a&gt;&amp;')
   })
 })
 

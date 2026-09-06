@@ -228,6 +228,55 @@ describe('sendTelegramNotification', () => {
     expect(markdown).toContain('[ivan@example.com](mailto:ivan@example.com)')
   })
 
+  it('экранирует HTML в url вложения (иначе — чужая ссылка в группе заявок и 400 от Telegram)', async () => {
+    fetchMock
+      // rich-путь отваливается → уходим в HTML sendMessage, где и был баг
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: false, description: 'rich unsupported' }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true, result: { message_id: 300 } }) })
+
+    const dataWithEvilAttachment = {
+      ...baseFormData,
+      attachments: [
+        {
+          name: 'смета',
+          size: 1,
+          status: 'uploaded',
+          url: '<a href="https://evil.example/">Открыть смету клиента</a>',
+        },
+      ],
+    } as unknown as FormData
+
+    await sendTelegramNotification(dataWithEvilAttachment, 'sub-1')
+
+    const [, options] = fetchMock.mock.calls[1]
+    const text = JSON.parse(options.body).text
+    expect(text).not.toContain('<a href="https://evil.example/">')
+    expect(text).toContain('&lt;a href=')
+    expect(text).toContain('&lt;/a&gt;')
+  })
+
+  it('экранирует кавычки в sourceUrl — нельзя выйти из href проекта', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: false, description: 'rich unsupported' }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true, result: { message_id: 301 } }) })
+
+    const calcData = {
+      ...baseFormData,
+      calculator_data: { selection: {}, project: { article: 'ДБ-04' } },
+    } as unknown as FormData
+
+    await sendTelegramNotification(
+      calcData,
+      'sub-1',
+      'https://ok.example/p" onclick="x',
+    )
+
+    const [, options] = fetchMock.mock.calls[1]
+    const text = JSON.parse(options.body).text
+    expect(text).toContain('<a href="https://ok.example/p&quot; onclick=&quot;x">')
+    expect(text).not.toContain('onclick="x"')
+  })
+
   it('возвращает { sent: false } если все chats fail (Telegram api error)', async () => {
     fetchMock.mockResolvedValue({
       ok: true,

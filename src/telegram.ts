@@ -2,6 +2,7 @@ import type { FormData } from './validation.js'
 import {
   type DirectusContext,
   escapeHtml,
+  escapeHtmlAttr,
   getPublicFilesUrl,
   isImageMimeType,
   getFormTypeLabel,
@@ -59,7 +60,11 @@ function buildAttachmentsBlock(data: FormData, excludeImages: boolean): string {
   if (uploaded.length > 0) {
     lines.push('<b>📎 Вложения:</b>')
     for (const item of uploaded.slice(0, 8)) {
-      const suffix = item.url ? ` (${item.url})` : ''
+      // url — пользовательский ввод (тело анонимного POST /forms/submit), а текст
+      // уходит в sendMessage с parse_mode: HTML. Без escapeHtml сюда вставляется
+      // кликабельный <a href="…"> злоумышленника (фишинг по группе заявок), а
+      // незакрытый тег роняет парсер Telegram → 400 → уведомление о лиде не придёт.
+      const suffix = item.url ? ` (${escapeHtml(item.url)})` : ''
       lines.push(`• ${escapeHtml(item.name)}${suffix}`)
     }
   }
@@ -113,7 +118,7 @@ function formatMessage(data: FormData, sourceUrl?: string, excludeImages = false
       if (label) {
         const text = `${escapeHtml(label)}${escapeHtml(size)}`
         if (sourceUrl) {
-          message += `\n🏠 <a href="${escapeHtml(sourceUrl)}">${text}</a>\n`
+          message += `\n🏠 <a href="${escapeHtmlAttr(sourceUrl)}">${text}</a>\n`
         }
         else {
           message += `\n🏠 ${text}\n`

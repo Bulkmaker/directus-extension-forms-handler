@@ -102,6 +102,21 @@ export function escapeHtml(text: string): string {
     .replace(/>/g, '&gt;')
 }
 
+/**
+ * Экранирование для позиции ЗНАЧЕНИЯ АТРИБУТА (`href="…"`, `alt="…"`).
+ *
+ * escapeHtml не трогает кавычки — а значит `"` внутри пользовательской строки
+ * (source_url и attachment.url приходят прямо из тела анонимного
+ * POST /forms/submit) закрывает атрибут и позволяет дописать свой тег/ссылку
+ * в письмо или Telegram-уведомление. В текстовой позиции достаточно escapeHtml,
+ * внутри кавычек — только эта функция.
+ */
+export function escapeHtmlAttr(text: string): string {
+  return escapeHtml(text)
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
 export function formatUnknownValue(value: unknown): string {
   if (value === null || value === undefined) return '—'
   if (typeof value === 'string') return value.length > 200 ? `${value.slice(0, 200)}…` : value
