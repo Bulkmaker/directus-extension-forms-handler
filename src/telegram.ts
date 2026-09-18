@@ -1,3 +1,6 @@
+import { request as httpRequest } from 'node:http'
+import { request as httpsRequest } from 'node:https'
+import { SocksProxyAgent } from 'socks-proxy-agent'
 import type { FormData } from './validation.js'
 import {
   type DirectusContext,
@@ -16,6 +19,84 @@ import {
 interface TelegramConfig {
   botToken: string
   chatIds: string[]
+}
+
+// SOCKS5-прокси к Telegram — для хостов, где api.telegram.org недоступен напрямую
+// (напр. VPS в РФ). Пусто = прямое подключение (как раньше, через глобальный fetch).
+// Тот же пакет и приём, что и в telegram-bot-dokploy (rr-infra): socks-proxy-agent
+// как http(s).Agent — держит бандл лёгким, в отличие от подключения всего undici
+// ради одного кастомного Dispatcher.
+interface SocksConfig {
+  host: string
+  port: number
+  username?: string
+  password?: string
+}
+
+export function loadSocksConfig(env: NodeJS.ProcessEnv = process.env): SocksConfig | null {
+  const host = (env.TG_SOCKS_HOST || '').trim()
+  const port = Number(env.TG_SOCKS_PORT || '')
+  if (!host || !Number.isInteger(port) || port <= 0) return null
+
+  return {
+    host,
+    port,
+    username: env.TG_SOCKS_USER || undefined,
+    password: env.TG_SOCKS_PASS || undefined,
+  }
+}
+
+let cachedAgent: SocksProxyAgent | null | undefined
+
+function getSocksAgent(): SocksProxyAgent | null {
+  if (cachedAgent !== undefined) return cachedAgent
+
+  const socks = loadSocksConfig()
+  if (!socks) {
+    cachedAgent = null
+    return cachedAgent
+  }
+
+  const auth = socks.username
+    ? `${encodeURIComponent(socks.username)}:${encodeURIComponent(socks.password || '')}@`
+    : ''
+  cachedAgent = new SocksProxyAgent(`socks5://${auth}${socks.host}:${socks.port}`)
+  console.log(`[forms-handler] Telegram через SOCKS5 ${socks.host}:${socks.port}`)
+  return cachedAgent
+}
+
+function requestViaSocksAgent(
+  url: string,
+  body: string,
+  agent: SocksProxyAgent,
+): Promise<{ ok: boolean, description?: string, result?: any }> {
+  const requestFn = url.startsWith('http://') ? httpRequest : httpsRequest
+
+  return new Promise((resolve, reject) => {
+    const req = requestFn(url, {
+      method: 'POST',
+      agent,
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body),
+      },
+    }, (res) => {
+      const chunks: Buffer[] = []
+      res.on('data', chunk => chunks.push(chunk))
+      res.on('error', reject)
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')))
+        }
+        catch (err) {
+          reject(err)
+        }
+      })
+    })
+    req.on('error', reject)
+    req.write(body)
+    req.end()
+  })
 }
 
 function loadTelegramConfig(): TelegramConfig {
@@ -389,10 +470,18 @@ async function callTelegramApi(
   body: Record<string, unknown>,
 ): Promise<{ ok: boolean; description?: string; result?: any }> {
   const baseUrl = process.env.TELEGRAM_API_BASE || 'https://api.telegram.org'
-  const response = await fetch(`${baseUrl}/bot${config.botToken}/${method}`, {
+  const url = `${baseUrl}/bot${config.botToken}/${method}`
+  const payload = JSON.stringify(body)
+
+  const agent = getSocksAgent()
+  if (agent) {
+    return requestViaSocksAgent(url, payload, agent)
+  }
+
+  const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: payload,
   })
   return response.json() as Promise<{ ok: boolean; description?: string; result?: any }>
 }

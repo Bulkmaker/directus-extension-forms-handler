@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { sendTelegramNotification } from '../telegram.js'
+import { loadSocksConfig, sendTelegramNotification } from '../telegram.js'
 import type { FormData } from '../validation.js'
 
 const baseFormData: FormData = {
@@ -265,5 +265,35 @@ describe('sendTelegramNotification', () => {
 
     expect(result).not.toHaveProperty('messages')
     expect(Object.keys(result)).toEqual(['sent'])
+  })
+})
+
+describe('loadSocksConfig', () => {
+  it('возвращает null, если TG_SOCKS_HOST не задан', () => {
+    expect(loadSocksConfig({})).toBeNull()
+  })
+
+  it('возвращает null, если задан host, но не задан/невалиден port', () => {
+    expect(loadSocksConfig({ TG_SOCKS_HOST: '93.186.79.27' })).toBeNull()
+    expect(loadSocksConfig({ TG_SOCKS_HOST: '93.186.79.27', TG_SOCKS_PORT: 'abc' })).toBeNull()
+    expect(loadSocksConfig({ TG_SOCKS_HOST: '93.186.79.27', TG_SOCKS_PORT: '0' })).toBeNull()
+  })
+
+  it('парсит host/port/user/pass', () => {
+    expect(loadSocksConfig({
+      TG_SOCKS_HOST: '93.186.79.27',
+      TG_SOCKS_PORT: '48050',
+      TG_SOCKS_USER: 'u',
+      TG_SOCKS_PASS: 'p',
+    })).toEqual({ host: '93.186.79.27', port: 48050, username: 'u', password: 'p' })
+  })
+
+  it('username/password не заданы — undefined (не пустая строка)', () => {
+    expect(loadSocksConfig({ TG_SOCKS_HOST: '93.186.79.27', TG_SOCKS_PORT: '48050' })).toEqual({
+      host: '93.186.79.27',
+      port: 48050,
+      username: undefined,
+      password: undefined,
+    })
   })
 })

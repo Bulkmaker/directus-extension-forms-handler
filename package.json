@@ -1,6 +1,6 @@
 {
   "name": "directus-extension-forms-handler",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Form submissions endpoint with modular antispam protection",
   "type": "module",
   "directus:extension": {
@@ -25,6 +25,7 @@
   "dependencies": {
     "ioredis": "^5.10.1",
     "nodemailer": "^8.0.7",
+    "socks-proxy-agent": "^10.1.0",
     "zod": "^4.4.3"
   },
   "overrides": {
