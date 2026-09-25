@@ -291,6 +291,8 @@ export function formatShortDate(): string {
 }
 
 export interface ResolvedAttachment {
+  /** id файла в directus_files — по нему модули сопоставляют вложения. */
+  id?: string
   name: string
   url: string
   mimeType?: string
@@ -382,6 +384,7 @@ export async function resolveAttachmentUrls(
         const file = await filesService.readOne(attachment.id, { fields: ['filename_disk'] })
         if (file?.filename_disk) {
           results.push({
+            id: attachment.id,
             name: attachment.name,
             url: `${publicFilesUrl}/${file.filename_disk}`,
             mimeType: attachment.mimeType,
@@ -398,4 +401,32 @@ export async function resolveAttachmentUrls(
   }
 
   return results
+}
+
+/**
+ * Оставляет только флаги, для которых в коллекции есть поле.
+ *
+ * Поля `vk_notified`/`max_notified` есть не во всех установках (схема сайта
+ * старше модуля). Directus на неизвестное поле в updateOne падает целиком —
+ * и тогда терялся бы даже `telegram_notified`. Если схема коллекции известна,
+ * отсутствующие поля просто не пишем; если неизвестна — пишем как есть,
+ * а сбой ловит try/catch вызывающего кода.
+ */
+export function filterFlagsBySchema(
+  flags: Record<string, boolean>,
+  schema: any,
+  collection: string,
+): { flags: Record<string, boolean>, skipped: string[] } {
+  const fields = schema?.collections?.[collection]?.fields
+  if (!fields || typeof fields !== 'object') {
+    return { flags, skipped: [] }
+  }
+
+  const kept: Record<string, boolean> = {}
+  const skipped: string[] = []
+  for (const [name, value] of Object.entries(flags)) {
+    if (name in fields) kept[name] = value
+    else skipped.push(name)
+  }
+  return { flags: kept, skipped }
 }

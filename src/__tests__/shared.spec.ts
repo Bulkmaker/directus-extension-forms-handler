@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
+  filterFlagsBySchema,
   isImageMimeType,
   escapeHtml,
   escapeHtmlAttr,
@@ -314,7 +315,7 @@ describe('resolveAttachmentUrls', () => {
       makeCtx(readOne),
     )
     expect(r).toEqual([
-      { name: 'photo.jpg', url: 'https://files.test/abc-x.jpg', mimeType: 'image/jpeg' },
+      { id: 'file-1', name: 'photo.jpg', url: 'https://files.test/abc-x.jpg', mimeType: 'image/jpeg' },
     ])
     expect(readOne).toHaveBeenCalledWith('file-1', { fields: ['filename_disk'] })
   })
@@ -344,5 +345,22 @@ describe('resolveAttachmentUrls', () => {
     }))
     const r = await resolveAttachmentUrls(attachments, makeCtx(readOne))
     expect(r).toHaveLength(10)
+  })
+})
+
+describe('filterFlagsBySchema', () => {
+  const flags = { telegram_notified: true, max_notified: true }
+
+  it('отбрасывает флаги без поля в коллекции', () => {
+    const schema = { collections: { leads: { fields: { telegram_notified: {} } } } }
+    expect(filterFlagsBySchema(flags, schema, 'leads')).toEqual({
+      flags: { telegram_notified: true },
+      skipped: ['max_notified'],
+    })
+  })
+
+  it('схема неизвестна — флаги как есть', () => {
+    expect(filterFlagsBySchema(flags, {}, 'leads')).toEqual({ flags, skipped: [] })
+    expect(filterFlagsBySchema(flags, undefined, 'leads')).toEqual({ flags, skipped: [] })
   })
 })

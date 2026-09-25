@@ -4,8 +4,9 @@ import { validateForm } from './validation.js'
 import type { FormData } from './validation.js'
 import { sendTelegramNotification } from './telegram.js'
 import { sendVkNotification } from './vk.js'
+import { sendMaxNotification } from './max.js'
 import { sendEmailNotification } from './email.js'
-import { getClientIp } from './shared.js'
+import { getClientIp, filterFlagsBySchema } from './shared.js'
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -95,7 +96,8 @@ export default {
       // 3. Save to Directus
       const schema = await getSchema()
       const { ItemsService } = services
-      const itemsService = new ItemsService(process.env.FORMS_COLLECTION || 'lead_submissions', {
+      const collection = process.env.FORMS_COLLECTION || 'lead_submissions'
+      const itemsService = new ItemsService(collection, {
         schema,
         accountability: { admin: true }, // Use admin context for creation
       })
@@ -139,6 +141,7 @@ export default {
       // 4. Send bot notifications (pass sourceUrl for page link + Directus context for image URLs).
       const telegramResult = await sendTelegramNotification(formData, submissionId, sourceUrl, { services, getSchema })
       const vkResult = await sendVkNotification(formData, submissionId, sourceUrl, { services, getSchema })
+      const maxResult = await sendMaxNotification(formData, submissionId, sourceUrl, { services, getSchema })
 
       // 5. Send email notification
       const emailSent = await sendEmailNotification(formData, submissionId, sourceUrl, { services, getSchema })
@@ -150,14 +153,20 @@ export default {
       const notifyFlags: Record<string, boolean> = {}
       if (telegramResult.sent) notifyFlags.telegram_notified = true
       if (vkResult.sent) notifyFlags.vk_notified = true // требует поля vk_notified в схеме (см. M3)
+      if (maxResult.sent) notifyFlags.max_notified = true // требует поля max_notified в схеме
       if (emailSent) notifyFlags.email_notified = true
 
-      if (Object.keys(notifyFlags).length > 0) {
+      const { flags: flagsToWrite, skipped } = filterFlagsBySchema(notifyFlags, schema, collection)
+      if (skipped.length > 0) {
+        console.warn(`[forms-handler] В коллекции ${collection} нет полей ${skipped.join(', ')} — эти флаги не записаны (уведомления ушли)`)
+      }
+
+      if (Object.keys(flagsToWrite).length > 0) {
         try {
-          await itemsService.updateOne(submissionId, notifyFlags)
+          await itemsService.updateOne(submissionId, flagsToWrite)
         } catch (flagErr) {
-          // Если поле vk_notified ещё не создано в схеме — updateOne упадёт здесь,
-          // но заявка валидна и ответ должен быть 201. Log-and-continue.
+          // Если схема неизвестна и поля vk_notified/max_notified нет — updateOne
+          // упадёт здесь, но заявка валидна и ответ должен быть 201. Log-and-continue.
           console.error(`[forms-handler] Не удалось записать notify-флаги для ${submissionId}:`, flagErr)
         }
       }

@@ -7,6 +7,9 @@ vi.mock('../telegram.js', () => ({
 vi.mock('../vk.js', () => ({
   sendVkNotification: vi.fn(async () => ({ sent: false })),
 }))
+vi.mock('../max.js', () => ({
+  sendMaxNotification: vi.fn(async () => ({ sent: false })),
+}))
 vi.mock('../email.js', () => ({
   sendEmailNotification: vi.fn(async () => false),
 }))
@@ -151,5 +154,88 @@ describe('POST /forms/submit — ответ клиенту', () => {
 
     expect(res.statusCode).toBe(201)
     expect(res.body.success).toBe(true)
+  })
+})
+
+describe('POST /forms/submit — флаги уведомлений', () => {
+  beforeEach(() => {
+    rateLimitStore.clear()
+  })
+
+  afterEach(() => {
+    stopRateLimitSweep()
+    rateLimitStore.clear()
+    vi.restoreAllMocks()
+  })
+
+  function setup(schema: unknown, updateImpl?: () => Promise<unknown>) {
+    let handler: Handler | null = null
+    const updateOne = vi.fn(updateImpl ?? (async () => 'sub-1'))
+    const router = {
+      post: (path: string, fn: Handler) => { if (path === '/submit') handler = fn },
+      get: () => {},
+    }
+    const context = {
+      services: {
+        ItemsService: class {
+          createOne = vi.fn(async () => 'sub-1')
+          updateOne = updateOne
+        },
+      },
+      getSchema: async () => schema,
+    }
+    endpoint.handler(router as any, context as any)
+    return { handler: handler!, updateOne }
+  }
+
+  async function allSent() {
+    const { sendTelegramNotification } = await import('../telegram.js')
+    const { sendVkNotification } = await import('../vk.js')
+    const { sendMaxNotification } = await import('../max.js')
+    vi.mocked(sendTelegramNotification).mockResolvedValueOnce({ sent: true })
+    vi.mocked(sendVkNotification).mockResolvedValueOnce({ sent: true })
+    vi.mocked(sendMaxNotification).mockResolvedValueOnce({ sent: true })
+  }
+
+  it('пишет max_notified, если поле есть в схеме', async () => {
+    await allSent()
+    const schema = { collections: { lead_submissions: { fields: {
+      telegram_notified: {}, vk_notified: {}, max_notified: {}, email_notified: {},
+    } } } }
+    const { handler, updateOne } = setup(schema)
+    const res = makeRes()
+
+    await handler(makeReq({ ...validBody }, '203.0.113.60'), res)
+
+    expect(res.statusCode).toBe(201)
+    expect(updateOne).toHaveBeenCalledWith('sub-1', {
+      telegram_notified: true, vk_notified: true, max_notified: true,
+    })
+  })
+
+  it('нет полей vk_notified/max_notified — пишет только telegram_notified, заявка 201', async () => {
+    await allSent()
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const schema = { collections: { lead_submissions: { fields: { telegram_notified: {} } } } }
+    const { handler, updateOne } = setup(schema)
+    const res = makeRes()
+
+    await handler(makeReq({ ...validBody }, '203.0.113.61'), res)
+
+    expect(res.statusCode).toBe(201)
+    expect(updateOne).toHaveBeenCalledWith('sub-1', { telegram_notified: true })
+    expect(warn.mock.calls.map(c => String(c[0])).join('\n')).toMatch(/vk_notified, max_notified/)
+  })
+
+  it('схема неизвестна и updateOne падает — всё равно 201', async () => {
+    await allSent()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { handler } = setup({}, async () => { throw new Error('field "max_notified" does not exist') })
+    const res = makeRes()
+
+    await handler(makeReq({ ...validBody }, '203.0.113.62'), res)
+
+    expect(res.statusCode).toBe(201)
+    expect(res.body).toEqual({ success: true, id: 'sub-1' })
   })
 })
