@@ -13,6 +13,7 @@ import {
   downloadFile,
   detectImageMime,
 } from './shared.js'
+import { buildLeadEmail, isStrictEmail, type LeadEmailAttachment } from './lead-email.js'
 
 interface MailAttachment {
   filename: string
@@ -385,11 +386,58 @@ function buildEmailHtml(
     `</body></html>`
 }
 
+export interface EmailNotificationOptions {
+  /** Строка о маршруте заявки (копия владельцу при маршрутизации к арендатору). */
+  routeNote?: string
+}
+
+/**
+ * Новый шаблон письма (lead-email.ts) для писем нам: включается
+ * FORMS_EMAIL_TEMPLATE=lead-v2 или автоматически в копии по маршруту form_routes.
+ * По умолчанию — прежний шаблон (обратная совместимость).
+ */
+function useLeadTemplate(options: EmailNotificationOptions): boolean {
+  return process.env.FORMS_EMAIL_TEMPLATE === 'lead-v2' || Boolean(options.routeNote)
+}
+
+function toLeadAttachments(prepared: PreparedAttachment[]): LeadEmailAttachment[] {
+  return prepared.map(item => ({ name: item.attachment.name, url: item.attachment.url, cid: item.cid }))
+}
+
+async function prepareAttachments(data: FormData, submissionId: string, directusContext: DirectusContext): Promise<PreparedAttachment[]> {
+  const resolved = await resolveAttachmentUrls(data.attachments, directusContext)
+  const prepared: PreparedAttachment[] = []
+  let imageCidCounter = 0
+
+  for (const att of resolved) {
+    const buffer = await downloadFile(att.url)
+    if (!buffer) continue
+
+    // Тип определяем по magic-bytes, а не по client-declared mimeType:
+    // PDF с заявленным image/jpeg иначе встроился бы как cid:image в HTML.
+    const realImageMime = detectImageMime(buffer)
+    const cid = realImageMime ? `form-image-${submissionId}-${imageCidCounter++}` : undefined
+
+    prepared.push({
+      attachment: att,
+      cid,
+      mail: {
+        filename: att.name,
+        content: buffer,
+        contentType: realImageMime ?? att.mimeType,
+        ...(cid ? { cid } : {}),
+      },
+    })
+  }
+  return prepared
+}
+
 export async function sendEmailNotification(
   data: FormData,
   submissionId: string,
   sourceUrl?: string,
   directusContext?: DirectusContext,
+  options: EmailNotificationOptions = {},
 ): Promise<boolean> {
   if (!directusContext) {
     console.warn('[forms-handler] No Directus context, cannot send email')
@@ -404,36 +452,30 @@ export async function sendEmailNotification(
   }
 
   try {
-    // Resolve attachment URLs + download files to attach directly to email
-    const resolved = await resolveAttachmentUrls(data.attachments, directusContext)
-    const prepared: PreparedAttachment[] = []
-    let imageCidCounter = 0
+    const prepared = await prepareAttachments(data, submissionId, directusContext)
 
-    for (const att of resolved) {
-      const buffer = await downloadFile(att.url)
-      if (!buffer) continue
-
-      // Тип определяем по magic-bytes, а не по client-declared mimeType:
-      // PDF с заявленным image/jpeg иначе встроился бы как cid:image в HTML
-      // (битая «картинка» в письме) — и доверять mime получателя на той стороне
-      // тоже нельзя. Если magic-bytes сказали "не картинка" — обычное вложение.
-      const realImageMime = detectImageMime(buffer)
-      const cid = realImageMime ? `form-image-${submissionId}-${imageCidCounter++}` : undefined
-
-      prepared.push({
-        attachment: att,
-        cid,
-        mail: {
-          filename: att.name,
-          content: buffer,
-          contentType: realImageMime ?? att.mimeType,
-          ...(cid ? { cid } : {}),
-        },
+    let subject = buildEmailSubject(data)
+    let html: string
+    let text: string | undefined
+    if (useLeadTemplate(options)) {
+      const cmsUrl = getCmsUrl(settings.cmsDomain)
+      const collection = process.env.FORMS_COLLECTION || 'lead_submissions'
+      const built = buildLeadEmail(data, {
+        audience: 'owner',
+        submissionId,
+        sourceUrl,
+        cmsItemUrl: cmsUrl ? `${cmsUrl}/admin/content/${collection}/${submissionId}` : null,
+        routeNote: options.routeNote,
+        attachments: toLeadAttachments(prepared),
+        fallbackTitle: getFormTypeLabel(data),
       })
+      subject = built.subject
+      html = built.html
+      text = built.text
     }
-
-    const subject = buildEmailSubject(data)
-    const html = buildEmailHtml(data, submissionId, sourceUrl, prepared, settings.cmsDomain)
+    else {
+      html = buildEmailHtml(data, submissionId, sourceUrl, prepared, settings.cmsDomain)
+    }
     const mailAttachments = prepared.map(item => item.mail)
 
     if (settings.source === 'db') {
@@ -454,6 +496,7 @@ export async function sendEmailNotification(
         to: settings.to,
         subject,
         html,
+        ...(text ? { text } : {}),
         attachments: mailAttachments,
       })
     }
@@ -470,6 +513,7 @@ export async function sendEmailNotification(
         to: settings.to,
         subject,
         html,
+        ...(text ? { text } : {}),
         attachments: mailAttachments,
       })
     }
@@ -480,5 +524,93 @@ export async function sendEmailNotification(
   catch (error) {
     console.error('[forms-handler] Failed to send email notification:', error)
     return false
+  }
+}
+
+/**
+ * Письмо арендатору по маршруту form_routes (новый шаблон, без ссылки на CMS).
+ *
+ * SMTP — тот же, что у писем нам: env EMAIL_SMTP_* (адрес отправителя из
+ * email_settings.from_email или EMAIL_FROM), независимо от email_settings.enabled —
+ * выключенная почта владельцу не отключает арендатора. Без EMAIL_SMTP_HOST —
+ * встроенная почта Directus. Ответ на письмо уходит клиенту, если он оставил почту.
+ */
+export async function sendTenantEmail(
+  data: FormData,
+  submissionId: string,
+  to: string[],
+  sourceUrl?: string,
+  directusContext?: DirectusContext,
+): Promise<{ ok: boolean, error?: string }> {
+  const recipients = to.filter(isStrictEmail)
+  if (recipients.length === 0) return { ok: false, error: 'нет валидных адресов' }
+  if (!directusContext) return { ok: false, error: 'нет контекста Directus' }
+
+  try {
+    const prepared = await prepareAttachments(data, submissionId, directusContext)
+    const built = buildLeadEmail(data, {
+      audience: 'tenant',
+      submissionId,
+      sourceUrl,
+      attachments: toLeadAttachments(prepared),
+      fallbackTitle: getFormTypeLabel(data),
+    })
+    const replyTo = isStrictEmail(data.email) ? data.email : undefined
+    const mailAttachments = prepared.map(item => item.mail)
+
+    if (process.env.EMAIL_SMTP_HOST) {
+      let fromAddress: string | null = null
+      try {
+        const schema = await directusContext.getSchema()
+        const { ItemsService } = directusContext.services
+        const row = await new ItemsService('email_settings', { schema, accountability: { admin: true } })
+          .readSingleton({ fields: ['from_email'] })
+        fromAddress = sanitizeEmailField(row?.from_email, 'from_email')
+      }
+      catch {
+        // коллекции email_settings может не быть — берём env
+      }
+      fromAddress = fromAddress
+        ?? sanitizeEmailField(process.env.EMAIL_FROM || '', 'EMAIL_FROM')
+        ?? (process.env.EMAIL_SMTP_USER || '')
+      const brand = String(data.form_title || '').replace(/[\r\n\t"<>\\]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60)
+
+      const nodemailer = await import('nodemailer')
+      const transporter = nodemailer.createTransport({
+        host: process.env.EMAIL_SMTP_HOST,
+        port: Number(process.env.EMAIL_SMTP_PORT) || 587,
+        secure: process.env.EMAIL_SMTP_SECURE === 'true',
+        auth: { user: process.env.EMAIL_SMTP_USER || '', pass: process.env.EMAIL_SMTP_PASSWORD || '' },
+      })
+      await transporter.sendMail({
+        from: brand ? { name: brand, address: fromAddress } : fromAddress,
+        to: recipients.join(', '),
+        subject: built.subject,
+        html: built.html,
+        text: built.text,
+        ...(replyTo ? { replyTo } : {}),
+        attachments: mailAttachments,
+      })
+    }
+    else {
+      const schema = await directusContext.getSchema()
+      const { MailService } = directusContext.services
+      await new MailService({ schema }).send({
+        to: recipients.join(', '),
+        subject: built.subject,
+        html: built.html,
+        text: built.text,
+        ...(replyTo ? { replyTo } : {}),
+        attachments: mailAttachments,
+      })
+    }
+
+    console.log(`[forms-handler] Tenant email sent to ${recipients.join(', ')} for submission ${submissionId}`)
+    return { ok: true }
+  }
+  catch (error: any) {
+    const reason = String(error?.message || error).replace(/\s+/g, ' ').slice(0, 200)
+    console.error(`[forms-handler] Failed to send tenant email to ${recipients.join(', ')}:`, reason)
+    return { ok: false, error: reason }
   }
 }
