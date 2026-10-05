@@ -4,9 +4,16 @@ import { validateForm } from './validation.js'
 import type { FormData } from './validation.js'
 import { sendTelegramNotification } from './telegram.js'
 import { sendVkNotification } from './vk.js'
-import { sendMaxNotification } from './max.js'
-import { sendEmailNotification } from './email.js'
+import { sendMaxNotification, fetchMaxSenders } from './max.js'
+import { sendEmailNotification, sendTenantEmail } from './email.js'
 import { getClientIp, filterFlagsBySchema } from './shared.js'
+import {
+  DELIVERY_STATUS_FIELD,
+  ensureRoutesSchemaOnce,
+  findActiveRoute,
+  routesEnabled,
+} from './routes.js'
+import { deliverByRoute, formatDeliveryStatus, type DeliveryReport, type OwnerChannels } from './routing.js'
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -41,6 +48,14 @@ export default {
   id: 'forms',
   handler: (router: any, context: any) => {
   const { services, getSchema } = context
+
+  // Маршруты заявок (form_routes): схема создаётся при старте, только если включено.
+  if (routesEnabled()) {
+    const timer = setTimeout(() => {
+      void ensureRoutesSchemaOnce({ services, getSchema }, process.env.FORMS_COLLECTION || 'lead_submissions')
+    }, 3000)
+    timer.unref?.()
+  }
 
   /**
    * POST /forms/submit
@@ -138,32 +153,75 @@ export default {
       const submissionId = await itemsService.createOne(dbData)
       console.log(`[forms-handler] Created submission: ${submissionId}`)
 
-      // 4. Send bot notifications (pass sourceUrl for page link + Directus context for image URLs).
-      const telegramResult = await sendTelegramNotification(formData, submissionId, sourceUrl, { services, getSchema })
-      const vkResult = await sendVkNotification(formData, submissionId, sourceUrl, { services, getSchema })
-      const maxResult = await sendMaxNotification(formData, submissionId, sourceUrl, { services, getSchema })
+      // 4–5. Уведомления. Есть активный маршрут form_routes для form_key — заявка
+      //      уходит арендатору и (copy_to_owner) копией в глобальные каналы.
+      //      Нет маршрута (или FORMS_ROUTES_ENABLED не включён) — как раньше.
+      const directusContext = { services, getSchema }
+      const notifyOwner = async (routeNote?: string): Promise<OwnerChannels> => {
+        const telegramResult = await sendTelegramNotification(formData, submissionId, sourceUrl, directusContext)
+        const vkResult = await sendVkNotification(formData, submissionId, sourceUrl, directusContext)
+        const maxResult = await sendMaxNotification(formData, submissionId, sourceUrl, directusContext)
+        const emailSent = await sendEmailNotification(formData, submissionId, sourceUrl, directusContext, routeNote ? { routeNote } : undefined)
+        return { telegram: telegramResult.sent, vk: vkResult.sent, max: maxResult.sent, email: emailSent }
+      }
 
-      // 5. Send email notification
-      const emailSent = await sendEmailNotification(formData, submissionId, sourceUrl, { services, getSchema })
+      const route = routesEnabled() ? await findActiveRoute(formData.form_key, directusContext) : null
+      let owner: OwnerChannels = {}
+      let report: DeliveryReport | null = null
+      if (route) {
+        report = await deliverByRoute(
+          route,
+          {
+            email: to => sendTenantEmail(formData, submissionId, to, sourceUrl, directusContext),
+            telegram: async (chatIds) => {
+              const result = await sendTelegramNotification(formData, submissionId, sourceUrl, directusContext, { chatIds })
+              return result.sent ? { ok: true } : { ok: false, error: 'не доставлено (подробности в логе Directus)' }
+            },
+            max: async (targets) => {
+              const result = await sendMaxNotification(formData, submissionId, sourceUrl, directusContext, { recipients: targets })
+              return { ok: result.sent, ...(result.errors.length > 0 ? { error: result.errors.join('; ') } : {}) }
+            },
+          },
+          async (note) => {
+            owner = await notifyOwner(note)
+            return owner
+          },
+        )
+      }
+      else {
+        owner = await notifyOwner()
+      }
 
       // 6. Persist notification flags — НЕ должно ронять ответ:
       //    лид уже сохранён (createOne выше), флаги вторичны. Сбой updateOne
       //    раньше уходил в общий catch → 500 → юзер повторял отправку → дубль лида.
       //    Один updateOne вместо нескольких (меньше запросов).
       const notifyFlags: Record<string, boolean> = {}
-      if (telegramResult.sent) notifyFlags.telegram_notified = true
-      if (vkResult.sent) notifyFlags.vk_notified = true // требует поля vk_notified в схеме (см. M3)
-      if (maxResult.sent) notifyFlags.max_notified = true // требует поля max_notified в схеме
-      if (emailSent) notifyFlags.email_notified = true
+      if (owner.telegram || report?.tenant.telegram?.ok) notifyFlags.telegram_notified = true
+      if (owner.vk) notifyFlags.vk_notified = true // требует поля vk_notified в схеме (см. M3)
+      if (owner.max || report?.tenant.max?.ok) notifyFlags.max_notified = true // требует поля max_notified в схеме
+      if (owner.email || report?.tenant.email?.ok) notifyFlags.email_notified = true
 
       const { flags: flagsToWrite, skipped } = filterFlagsBySchema(notifyFlags, schema, collection)
       if (skipped.length > 0) {
         console.warn(`[forms-handler] В коллекции ${collection} нет полей ${skipped.join(', ')} — эти флаги не записаны (уведомления ушли)`)
       }
 
-      if (Object.keys(flagsToWrite).length > 0) {
+      // Журнал доставки по маршруту: JSON в fields._delivery + читаемый delivery_status.
+      const updateData: Record<string, unknown> = { ...flagsToWrite }
+      if (report) {
+        const collectionFields = schema?.collections?.[collection]?.fields
+        if (!collectionFields || 'fields' in collectionFields) {
+          updateData.fields = { ...(isPlainObject(dbData.fields) ? dbData.fields : {}), _delivery: report }
+        }
+        if (collectionFields && DELIVERY_STATUS_FIELD in collectionFields) {
+          updateData[DELIVERY_STATUS_FIELD] = formatDeliveryStatus(report)
+        }
+      }
+
+      if (Object.keys(updateData).length > 0) {
         try {
-          await itemsService.updateOne(submissionId, flagsToWrite)
+          await itemsService.updateOne(submissionId, updateData)
         } catch (flagErr) {
           // Если схема неизвестна и поля vk_notified/max_notified нет — updateOne
           // упадёт здесь, но заявка валидна и ответ должен быть 201. Log-and-continue.
@@ -183,6 +241,19 @@ export default {
         error: 'Внутренняя ошибка сервера',
       })
     }
+  })
+
+  /**
+   * GET /forms/routes/max-updates — только администратору Directus.
+   * Кто написал MAX-боту заявок: user_id и код из ссылки ?start=… — для form_routes.
+   */
+  router.get('/routes/max-updates', async (req: any, res: any) => {
+    if (req.accountability?.admin !== true) {
+      return res.status(403).json({ success: false, error: 'Только для администратора' })
+    }
+    const result = await fetchMaxSenders()
+    if (!result.ok) return res.status(502).json({ success: false, error: result.error })
+    return res.json({ success: true, senders: result.senders })
   })
 
   /**

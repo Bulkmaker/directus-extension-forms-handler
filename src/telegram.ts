@@ -547,18 +547,29 @@ export interface TelegramNotificationResult {
   sent: boolean
 }
 
+export interface TelegramNotificationOptions {
+  /**
+   * Получатели маршрута form_routes вместо TG_LEADS_CHAT_IDS. Для них master switch
+   * FORMS_TELEGRAM_ENABLED не нужен (получатель задан явно), нужен токен бота.
+   */
+  chatIds?: string[]
+}
+
 export async function sendTelegramNotification(
   data: FormData,
   submissionId: string,
   sourceUrl?: string,
   directusContext?: DirectusContext,
+  options: TelegramNotificationOptions = {},
 ): Promise<TelegramNotificationResult> {
-  if (process.env.FORMS_TELEGRAM_ENABLED !== 'true') {
+  const routed = Array.isArray(options.chatIds)
+  if (!routed && process.env.FORMS_TELEGRAM_ENABLED !== 'true') {
     console.log('[forms-handler] Telegram notifications disabled (FORMS_TELEGRAM_ENABLED != true)')
     return { sent: false }
   }
 
   const config = loadTelegramConfig()
+  if (routed) config.chatIds = [...new Set(options.chatIds!.map(id => String(id).trim()).filter(Boolean))]
 
   if (!config.botToken || config.chatIds.length === 0) {
     console.warn('[forms-handler] Telegram not configured (missing TG_LEADS_BOT_TOKEN or chat IDs)')

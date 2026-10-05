@@ -32,10 +32,19 @@ function allLogs(...spies: ReturnType<typeof vi.spyOn>[]): string {
 }
 
 describe('formatMaxMessage', () => {
+  it('подпись заявки называет форму и объект (вакансию), а не «Контактная форма»', () => {
+    const text = formatMaxMessage(
+      { ...baseFormData, form_key: 'vacancy', form_title: 'Отклик на вакансию: Каменщик', type: 'contact' } as unknown as FormData,
+      'https://site.example/vacancies/kamenshchik',
+    )
+    expect(text).toContain('<b>Новая заявка: Отклик на вакансию: Каменщик</b>')
+    expect(text).not.toContain('Контактная форма')
+  })
+
   it('содержит тип формы, контакты, поля, страницу и футер', () => {
     const text = formatMaxMessage(baseFormData, 'https://taurusdom.ru/proekty/dom-1')
 
-    expect(text).toContain('<b>Новая заявка: Контактная форма</b>')
+    expect(text).toContain('<b>Новая заявка: Обратный звонок</b>')
     expect(text).toContain('👤 <b>Имя:</b> Иван')
     expect(text).toContain('📞 <b>Телефон:</b> +79991112233')
     expect(text).toContain('💬 <b>Сообщение:</b>\nТест')
@@ -86,6 +95,8 @@ describe('formatMaxMessage', () => {
     const data = {
       ...baseFormData,
       type: 'calculator',
+      form_key: 'calculator',
+      form_title: null,
       calculator_data: {
         selection: { timber: { label: 'Брус 150×150' }, roof: { label: 'Металлочерепица' } },
         total: { value: 1500000 },
@@ -169,7 +180,7 @@ describe('sendMaxNotification', () => {
 
     const result = await sendMaxNotification(baseFormData, 'sub-1')
 
-    expect(result).toEqual({ sent: false })
+    expect(result).toMatchObject({ sent: false })
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
@@ -179,7 +190,7 @@ describe('sendMaxNotification', () => {
 
     const result = await sendMaxNotification(baseFormData, 'sub-1')
 
-    expect(result).toEqual({ sent: false })
+    expect(result).toMatchObject({ sent: false })
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
@@ -188,7 +199,7 @@ describe('sendMaxNotification', () => {
 
     const result = await sendMaxNotification(baseFormData, 'sub-1', 'https://taurusdom.ru/')
 
-    expect(result).toEqual({ sent: true })
+    expect(result).toMatchObject({ sent: true })
     expect(fetchMock).toHaveBeenCalledTimes(1)
 
     const [url, init] = fetchMock.mock.calls[0]
@@ -199,7 +210,7 @@ describe('sendMaxNotification', () => {
 
     const body = JSON.parse(init.body)
     expect(body.format).toBe('html')
-    expect(body.text).toContain('<b>Новая заявка: Контактная форма</b>')
+    expect(body.text).toContain('<b>Новая заявка: Обратный звонок</b>')
     expect(body.text.length).toBeLessThanOrEqual(4000)
   })
 
@@ -219,7 +230,7 @@ describe('sendMaxNotification', () => {
 
     const result = await sendMaxNotification(baseFormData, 'sub-1')
 
-    expect(result).toEqual({ sent: true })
+    expect(result).toMatchObject({ sent: true })
     const urls = fetchMock.mock.calls.map(([url]) => String(url))
     expect(urls).toHaveLength(3)
     expect(urls[0]).toContain('chat_id=-100')
@@ -236,7 +247,7 @@ describe('sendMaxNotification', () => {
 
     const result = await sendMaxNotification(baseFormData, 'sub-1')
 
-    expect(result).toEqual({ sent: true })
+    expect(result).toMatchObject({ sent: true })
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
@@ -251,7 +262,7 @@ describe('sendMaxNotification', () => {
 
     const result = await sendMaxNotification(baseFormData, 'sub-1')
 
-    expect(result).toEqual({ sent: false })
+    expect(result).toMatchObject({ sent: false })
     const logs = allLogs(error, warn, log)
     expect(logs).toContain('HTTP 401')
     expect(logs).toContain('verify.token')
@@ -264,7 +275,7 @@ describe('sendMaxNotification', () => {
 
     const result = await sendMaxNotification(baseFormData, 'sub-1')
 
-    expect(result).toEqual({ sent: false })
+    expect(result).toMatchObject({ sent: false })
     const logs = allLogs(error)
     expect(logs).toContain('ECONNREFUSED')
     expect(logs).not.toContain(TOKEN)
@@ -278,7 +289,7 @@ describe('sendMaxNotification', () => {
 
     const result = await sendMaxNotification({ ...baseFormData, name: 'Иван & Ко' } as FormData, 'sub-1')
 
-    expect(result).toEqual({ sent: true })
+    expect(result).toMatchObject({ sent: true })
     const retry = JSON.parse(fetchMock.mock.calls[1][1].body)
     expect(retry.format).toBeUndefined()
     expect(retry.text).not.toMatch(/<\/?b>/)
@@ -296,7 +307,7 @@ describe('sendMaxNotification', () => {
       await vi.advanceTimersByTimeAsync(1000)
       const result = await pending
 
-      expect(result).toEqual({ sent: true })
+      expect(result).toMatchObject({ sent: true })
       expect(fetchMock).toHaveBeenCalledTimes(2)
     }
     finally {
@@ -331,5 +342,37 @@ describe('sendMaxNotification', () => {
     finally {
       delete process.env.PUBLIC_FILES_URL
     }
+  })
+})
+
+describe('sendMaxNotification — получатели маршрута', () => {
+  const env = { ...process.env }
+  afterEach(() => {
+    process.env = { ...env }
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('options.recipients заменяют MAX_CHAT_IDS/MAX_USER_IDS, ошибки — в errors без токена', async () => {
+    process.env.MAX_BOT_TOKEN = TOKEN
+    process.env.MAX_CHAT_IDS = '-999'
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(okResponse())
+      .mockResolvedValueOnce(errorResponse(403, { code: 'chat.denied', message: `denied for ${TOKEN}` }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await sendMaxNotification(baseFormData, 'sub-1', undefined, undefined, {
+      recipients: [{ kind: 'user_id', id: '555' }, { kind: 'user_id', id: '777' }, { kind: 'user_id', id: 'bad' }],
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(String(fetchMock.mock.calls[0][0])).toContain('user_id=555')
+    expect(String(fetchMock.mock.calls[1][0])).toContain('user_id=777')
+    expect(result.sent).toBe(true)
+    expect(result.errors).toHaveLength(1)
+    expect(result.errors[0]).toContain('user 777: HTTP 403')
+    expect(result.errors[0]).not.toContain(TOKEN)
   })
 })

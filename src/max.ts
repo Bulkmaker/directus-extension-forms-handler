@@ -35,7 +35,7 @@ const DEFAULT_MAX_API_BASE = 'https://botapi.max.ru'
 const MAX_TEXT_LIMIT = 4000
 const TEXT_SOFT_LIMIT = 3900
 
-interface MaxRecipient {
+export interface MaxRecipient {
   kind: 'chat_id' | 'user_id'
   id: string
 }
@@ -48,6 +48,13 @@ interface MaxConfig {
 
 export interface MaxNotificationResult {
   sent: boolean
+  /** Ошибки по получателям (без токена) — для журнала доставки. */
+  errors: string[]
+}
+
+export interface MaxNotificationOptions {
+  /** Получатели маршрута form_routes вместо MAX_CHAT_IDS/MAX_USER_IDS. */
+  recipients?: MaxRecipient[]
 }
 
 const ID_RE = /^-?\d{1,20}$/
@@ -310,7 +317,7 @@ async function sendToRecipient(
   config: MaxConfig,
   recipient: MaxRecipient,
   html: string,
-): Promise<boolean> {
+): Promise<string | null> {
   const who = describeRecipient(recipient)
   const htmlBody = { text: html, format: 'html', notify: true }
 
@@ -330,11 +337,12 @@ async function sendToRecipient(
   }
 
   if (!result.ok) {
-    console.error(`[forms-handler] MAX POST /messages error (${who}): ${formatMaxError(result.error, config.botToken)}`)
-    return false
+    const reason = formatMaxError(result.error, config.botToken)
+    console.error(`[forms-handler] MAX POST /messages error (${who}): ${reason}`)
+    return `${who}: ${reason}`
   }
 
-  return true
+  return null
 }
 
 export async function sendMaxNotification(
@@ -342,16 +350,19 @@ export async function sendMaxNotification(
   submissionId: string,
   sourceUrl?: string,
   directusContext?: DirectusContext,
+  options: MaxNotificationOptions = {},
 ): Promise<MaxNotificationResult> {
   const config = loadMaxConfig()
+  if (options.recipients) config.recipients = options.recipients.filter(r => ID_RE.test(r.id))
 
   if (!config.botToken || config.recipients.length === 0) {
-    console.log('[forms-handler] MAX not configured (missing MAX_BOT_TOKEN or MAX_CHAT_IDS/MAX_USER_IDS)')
-    return { sent: false }
+    console.log('[forms-handler] MAX not configured (missing MAX_BOT_TOKEN or recipients)')
+    return { sent: false, errors: config.botToken ? [] : ['MAX_BOT_TOKEN не задан'] }
   }
 
+  const errors: string[] = []
   try {
-    // Вложения в MAX — ссылками на файлы в S3 (PUBLIC_FILES_URL), без загрузки
+    // Вложения в MAX — ссылками на файлы в хранилище (PUBLIC_FILES_URL), без загрузки
     // картинок в MAX: заявке хватает ссылки, а загрузка — лишние запросы и лимиты.
     const hasUploads = Array.isArray(data.attachments)
       && data.attachments.some(item => item.status !== 'failed' && item.id)
@@ -368,23 +379,99 @@ export async function sendMaxNotification(
     let anySent = false
     for (const recipient of config.recipients) {
       try {
-        const sent = await sendToRecipient(config, recipient, html)
-        if (sent) {
+        const error = await sendToRecipient(config, recipient, html)
+        if (error) {
+          errors.push(error)
+        }
+        else {
           console.log(`[forms-handler] MAX notification sent to ${describeRecipient(recipient)} for submission ${submissionId}`)
           anySent = true
         }
       }
       catch (error) {
-        const reason = error instanceof Error ? error.message : String(error)
-        console.error(`[forms-handler] Failed to send MAX notification to ${describeRecipient(recipient)}: ${redact(reason, config.botToken)}`)
+        const reason = redact(error instanceof Error ? error.message : String(error), config.botToken)
+        errors.push(`${describeRecipient(recipient)}: ${reason}`)
+        console.error(`[forms-handler] Failed to send MAX notification to ${describeRecipient(recipient)}: ${reason}`)
       }
     }
 
-    return { sent: anySent }
+    return { sent: anySent, errors }
   }
   catch (error) {
-    const reason = error instanceof Error ? error.message : String(error)
-    console.error(`[forms-handler] Failed to send MAX notification: ${redact(reason, config.botToken)}`)
-    return { sent: false }
+    const reason = redact(error instanceof Error ? error.message : String(error), config.botToken)
+    console.error(`[forms-handler] Failed to send MAX notification: ${reason}`)
+    return { sent: false, errors: [...errors, reason] }
+  }
+}
+
+// ——— Как узнать id арендатора в MAX ————————————————————————————————————
+//
+// MAX шлёт боту событие bot_started, когда человек нажимает «Начать» (в том числе
+// по ссылке https://max.ru/<бот>?start=<код>), и message_created на каждое
+// сообщение. GET /updates отдаёт их, пока у бота нет webhook-подписки.
+// Админ-эндпоинт /forms/routes/max-updates показывает список: кто написал,
+// его user_id/chat_id и код из ссылки — id копируется в запись form_routes.
+
+export interface MaxSender {
+  type: string
+  user_id?: string
+  chat_id?: string
+  name?: string
+  payload?: string
+  text?: string
+  time?: string
+}
+
+function pickSender(update: any): MaxSender | null {
+  if (!update || typeof update !== 'object') return null
+  const type = String(update.update_type || '')
+  const time = typeof update.timestamp === 'number' ? new Date(update.timestamp).toISOString() : undefined
+  if (type === 'bot_started') {
+    const user = update.user || {}
+    return {
+      type,
+      user_id: user.user_id !== undefined ? String(user.user_id) : undefined,
+      chat_id: update.chat_id !== undefined ? String(update.chat_id) : undefined,
+      name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.name || undefined,
+      payload: typeof update.payload === 'string' ? update.payload.slice(0, 120) : undefined,
+      time,
+    }
+  }
+  if (type === 'message_created') {
+    const message = update.message || {}
+    const sender = message.sender || {}
+    const recipient = message.recipient || {}
+    return {
+      type,
+      user_id: sender.user_id !== undefined ? String(sender.user_id) : undefined,
+      chat_id: recipient.chat_id !== undefined ? String(recipient.chat_id) : undefined,
+      name: [sender.first_name, sender.last_name].filter(Boolean).join(' ') || sender.name || undefined,
+      text: typeof message.body?.text === 'string' ? message.body.text.slice(0, 120) : undefined,
+      time,
+    }
+  }
+  return null
+}
+
+export async function fetchMaxSenders(): Promise<{ ok: true, senders: MaxSender[] } | { ok: false, error: string }> {
+  const config = loadMaxConfig()
+  if (!config.botToken) return { ok: false, error: 'MAX_BOT_TOKEN не задан' }
+  try {
+    const query = new URLSearchParams({ limit: '100', timeout: '0', types: 'bot_started,message_created' })
+    const response = await fetch(`${config.apiBase}/updates?${query}`, {
+      headers: { Authorization: config.botToken },
+      signal: AbortSignal.timeout(15000),
+    })
+    if (!response.ok) {
+      return { ok: false, error: redact(`HTTP ${response.status} (если у бота есть webhook-подписка, /updates недоступен)`, config.botToken) }
+    }
+    const payload = await response.json() as { updates?: unknown[] }
+    const senders = (Array.isArray(payload?.updates) ? payload.updates : [])
+      .map(pickSender)
+      .filter((item): item is MaxSender => item !== null)
+    return { ok: true, senders }
+  }
+  catch (error) {
+    return { ok: false, error: redact(error instanceof Error ? error.message : String(error), config.botToken) }
   }
 }
