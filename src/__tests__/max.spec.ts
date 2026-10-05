@@ -32,10 +32,19 @@ function allLogs(...spies: ReturnType<typeof vi.spyOn>[]): string {
 }
 
 describe('formatMaxMessage', () => {
+  it('подпись заявки называет форму и объект (вакансию), а не «Контактная форма»', () => {
+    const text = formatMaxMessage(
+      { ...baseFormData, form_key: 'vacancy', form_title: 'Отклик на вакансию: Каменщик', type: 'contact' } as unknown as FormData,
+      'https://site.example/vacancies/kamenshchik',
+    )
+    expect(text).toContain('<b>Новая заявка: Отклик на вакансию: Каменщик</b>')
+    expect(text).not.toContain('Контактная форма')
+  })
+
   it('содержит тип формы, контакты, поля, страницу и футер', () => {
     const text = formatMaxMessage(baseFormData, 'https://taurusdom.ru/proekty/dom-1')
 
-    expect(text).toContain('<b>Новая заявка: Контактная форма</b>')
+    expect(text).toContain('<b>Новая заявка: Обратный звонок</b>')
     expect(text).toContain('👤 <b>Имя:</b> Иван')
     expect(text).toContain('📞 <b>Телефон:</b> +79991112233')
     expect(text).toContain('💬 <b>Сообщение:</b>\nТест')
@@ -86,6 +95,8 @@ describe('formatMaxMessage', () => {
     const data = {
       ...baseFormData,
       type: 'calculator',
+      form_key: 'calculator',
+      form_title: null,
       calculator_data: {
         selection: { timber: { label: 'Брус 150×150' }, roof: { label: 'Металлочерепица' } },
         total: { value: 1500000 },
@@ -199,7 +210,7 @@ describe('sendMaxNotification', () => {
 
     const body = JSON.parse(init.body)
     expect(body.format).toBe('html')
-    expect(body.text).toContain('<b>Новая заявка: Контактная форма</b>')
+    expect(body.text).toContain('<b>Новая заявка: Обратный звонок</b>')
     expect(body.text.length).toBeLessThanOrEqual(4000)
   })
 

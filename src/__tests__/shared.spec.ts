@@ -101,15 +101,46 @@ describe('formatUnknownValue', () => {
 })
 
 describe('getFormTypeLabel', () => {
-  it('contact → "Контактная форма"', () => {
-    expect(getFormTypeLabel(makeFormData({ type: 'contact' }))).toBe('Контактная форма')
+  // Сайт шлёт form_key и form_title, а type обработчик подставляет сам ('contact'
+  // по умолчанию). Раньше он перебивал название формы: все заявки подписывались
+  // «Контактная форма».
+  const fromSite = (form_key: string, form_title: string | null, type = 'contact') =>
+    makeFormData({ form_key, form_title, type })
+
+  it('название формы и объекта из form_title побеждает type=contact', () => {
+    expect(getFormTypeLabel(fromSite('vacancy', 'Отклик на вакансию: Каменщик'))).toBe('Отклик на вакансию: Каменщик')
+    expect(getFormTypeLabel(fromSite('promo', 'Акция «Скидка на фундамент»'))).toBe('Акция «Скидка на фундамент»')
+    expect(getFormTypeLabel(fromSite('project-calculator', 'Калькулятор: Дом 120'))).toBe('Калькулятор: Дом 120')
   })
-  it('calculator → "Расчет проекта"', () => {
-    expect(getFormTypeLabel(makeFormData({ type: 'calculator' }))).toBe('Расчет проекта')
+  it('form_title с переводами строк и лишними пробелами схлопывается в одну строку', () => {
+    expect(getFormTypeLabel(fromSite('vacancy', '  Отклик\n на   вакансию\t'))).toBe('Отклик на вакансию')
+  })
+  it('без form_title: название по известному form_key', () => {
+    expect(getFormTypeLabel(fromSite('call', null))).toBe('Обратный звонок')
+    expect(getFormTypeLabel(fromSite('quiz', null))).toBe('Квиз')
+    expect(getFormTypeLabel(fromSite('mortgage', ''))).toBe('Заявка на ипотеку')
+    expect(getFormTypeLabel(fromSite('review', null))).toBe('Отзыв с сайта')
+    expect(getFormTypeLabel(fromSite('favorites', null))).toBe('Избранные проекты')
+  })
+  it('неизвестный form_key без form_title: печатается ключ, ничего не ломается', () => {
+    expect(getFormTypeLabel(fromSite('brand-new-form', null))).toBe('brand-new-form')
+  })
+  it('form_key из прототипа объекта не возвращает функцию', () => {
+    expect(getFormTypeLabel(fromSite('constructor', null))).toBe('constructor')
+    expect(getFormTypeLabel(fromSite('toString', null, 'toString'))).toBe('toString')
+  })
+  it('старый формат без form_title: contact → "Контактная форма"', () => {
+    expect(getFormTypeLabel(fromSite('contact', null))).toBe('Контактная форма')
+  })
+  it('старый формат без form_title: calculator → "Расчет проекта"', () => {
+    expect(getFormTypeLabel(fromSite('calculator', null, 'calculator'))).toBe('Расчет проекта')
   })
   it('неизвестный type → form_title или form_key', () => {
     expect(getFormTypeLabel(makeFormData({ type: 'custom', form_title: 'Спец-форма' }))).toBe('Спец-форма')
     expect(getFormTypeLabel(makeFormData({ type: 'custom', form_title: null, form_key: 'special' }))).toBe('special')
+  })
+  it('совсем пустая заявка получает нейтральную подпись', () => {
+    expect(getFormTypeLabel(makeFormData({ type: '', form_key: '', form_title: null }))).toBe('Заявка')
   })
 })
 

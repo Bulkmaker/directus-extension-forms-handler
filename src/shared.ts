@@ -141,14 +141,67 @@ export const TYPE_LABELS: Record<string, string> = {
   delivery: 'Форма доставки',
 }
 
+/**
+ * Названия форм сайта по form_key: запасной вариант, когда форма не прислала
+ * form_title. Ключи ставят модули платформы (ContactForm, квиз, калькуляторы,
+ * вакансии, акции, ипотека, отзывы). Неизвестный ключ не ошибка: подпись
+ * берётся из form_title, а при его отсутствии печатается сам ключ.
+ */
+export const FORM_KEY_LABELS: Record<string, string> = {
+  call: 'Обратный звонок',
+  request: 'Заявка с сайта',
+  calc: 'Расчет стоимости',
+  quiz: 'Квиз',
+  smeta: 'Смета по этапам',
+  'project-calculator': 'Калькулятор проекта',
+  favorites: 'Избранные проекты',
+  vacancy: 'Отклик на вакансию',
+  'team-booking': 'Бронирование бригады',
+  promo: 'Заявка по акции',
+  mortgage: 'Заявка на ипотеку',
+  delivery: 'Расчет доставки',
+  review: 'Отзыв с сайта',
+  catalog: 'Запрос каталога',
+  'demo-site': 'Заявка с демо-сайта',
+}
+
+function ownLabel(map: Record<string, string>, key: unknown): string | undefined {
+  // hasOwn: form_key приходит от клиента, 'constructor' / 'toString' не должны
+  // вернуть функцию из прототипа вместо строки
+  return typeof key === 'string' && Object.prototype.hasOwnProperty.call(map, key) ? map[key] : undefined
+}
+
+function cleanLabel(value: unknown): string {
+  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : ''
+}
+
 export const DEVICE_LABELS: Record<string, string> = {
   mobile: '📱 Телефон',
   tablet: '📱 Планшет',
   desktop: '💻 Компьютер',
 }
 
+/** Незнакомый form_key без form_title: печатаем сам ключ, он информативнее подставленного type. */
+function unknownKeyLabel(data: FormData): string {
+  const key = cleanLabel(data.form_key)
+  return key && key !== data.type ? key : ''
+}
+
+/**
+ * Подпись заявки в заголовке уведомления (Telegram, MAX, VK, письмо).
+ *
+ * Сайт шлёт form_key и form_title (название вакансии, акции, проекта), а поле
+ * type обработчик подставляет сам ('contact' по умолчанию). Раньше type
+ * проверялся первым, и любая форма подписывалась «Контактная форма». Теперь
+ * первым идёт form_title: он уже называет и форму, и объект.
+ */
 export function getFormTypeLabel(data: FormData): string {
-  return TYPE_LABELS[data.type] || data.form_title || data.form_key || data.type
+  return cleanLabel(data.form_title)
+    || ownLabel(FORM_KEY_LABELS, data.form_key)
+    || unknownKeyLabel(data)
+    || ownLabel(TYPE_LABELS, data.type)
+    || cleanLabel(data.type)
+    || 'Заявка'
 }
 
 /** Known/technical fields excluded from custom fields display */
