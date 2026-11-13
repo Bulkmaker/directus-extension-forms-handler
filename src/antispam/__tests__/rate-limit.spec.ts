@@ -14,6 +14,7 @@ const config: AntispamConfig = {
   honeypot: { enabled: false, fieldName: '_honeypot' },
   turnstile: { enabled: false, siteKey: '', secretKey: '' },
   hcaptcha: { enabled: false, siteKey: '', secretKey: '' },
+  smartcaptcha: { enabled: false, serverKey: '' },
   rateLimit: { enabled: true, maxRequests: 3, windowMs: 60000 },
   timeCheck: { enabled: false, minSeconds: 3 },
 }
@@ -42,6 +43,26 @@ describe('getClientIp', () => {
 
   it('падает на socket.remoteAddress если нет header', () => {
     expect(getClientIp(makeReq({ ip: '10.0.0.5' }))).toBe('10.0.0.5')
+  })
+
+  it('TRUSTED_CLIENT_IP_HEADER: берёт адрес из доверенного заголовка (cf-connecting-ip)', () => {
+    vi.stubEnv('TRUSTED_CLIENT_IP_HEADER', 'CF-Connecting-IP')
+    const req = { headers: { 'cf-connecting-ip': '6.6.6.6', 'x-real-ip': '10.0.1.6', 'x-forwarded-for': '10.0.1.6' }, socket: {} } as unknown as Request
+    expect(getClientIp(req)).toBe('6.6.6.6')
+    vi.unstubAllEnvs()
+  })
+
+  it('TRUSTED_CLIENT_IP_HEADER: без заголовка или с мусором прежний порядок', () => {
+    vi.stubEnv('TRUSTED_CLIENT_IP_HEADER', 'cf-connecting-ip')
+    expect(getClientIp(makeReq({ xForwardedFor: '1.1.1.1, 10.0.1.6' }))).toBe('10.0.1.6')
+    const bad = { headers: { 'cf-connecting-ip': 'not-an-ip', 'x-real-ip': '10.0.1.6' }, socket: {} } as unknown as Request
+    expect(getClientIp(bad)).toBe('10.0.1.6')
+    vi.unstubAllEnvs()
+  })
+
+  it('без TRUSTED_CLIENT_IP_HEADER заголовок cf-connecting-ip игнорируется', () => {
+    const req = { headers: { 'cf-connecting-ip': '6.6.6.6', 'x-real-ip': '10.0.1.6' }, socket: {} } as unknown as Request
+    expect(getClientIp(req)).toBe('10.0.1.6')
   })
 
   it('возвращает "unknown" если ничего нет', () => {

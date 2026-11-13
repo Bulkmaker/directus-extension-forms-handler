@@ -7,6 +7,7 @@ const config: AntispamConfig = {
   honeypot: { enabled: true, fieldName: '_honeypot' },
   turnstile: { enabled: false, siteKey: '', secretKey: '' },
   hcaptcha: { enabled: false, siteKey: '', secretKey: '' },
+  smartcaptcha: { enabled: false, serverKey: '' },
   rateLimit: { enabled: false, maxRequests: 5, windowMs: 60000 },
   timeCheck: { enabled: false, minSeconds: 3 },
 }

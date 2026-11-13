@@ -96,6 +96,8 @@ Directus endpoint-расширение для приёма заявок с фо�
 | `ANTISPAM_RATE_LIMIT_ENABLED` / `ANTISPAM_RATE_LIMIT_MAX` / `ANTISPAM_RATE_LIMIT_WINDOW` | `true` / `5` / `60000` | лимит заявок с IP за окно (мс) |
 | `ANTISPAM_TURNSTILE_ENABLED` + `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET_KEY` | выкл. | Cloudflare Turnstile |
 | `ANTISPAM_HCAPTCHA_ENABLED` + `HCAPTCHA_SITE_KEY`, `HCAPTCHA_SECRET_KEY` | выкл. | hCaptcha |
+| `ANTISPAM_SMARTCAPTCHA_ENABLED` + `SMARTCAPTCHA_SERVER_KEY` | выкл. | Yandex SmartCaptcha. Фронт шлёт токен невидимой капчи в поле `_smartcaptcha`; нет токена - заявка отклонена. Если сервис проверки недоступен (не 200, сеть, таймаут 3 с), заявка пропускается. Включено без ключа: проверка пропускается, в лог пишется предупреждение |
+| `TRUSTED_CLIENT_IP_HEADER` | не задан | заголовок с адресом посетителя для rate-limit и поля `ip` (за Cloudflare: `cf-connecting-ip`). Только если Directus доступен снаружи лишь через Cloudflare |
 
 ## Сборка и релиз
 

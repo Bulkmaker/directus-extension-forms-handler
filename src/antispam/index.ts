@@ -3,6 +3,7 @@ import type { AntispamConfig, AntispamCheckResult, FormDataWithAntispam } from '
 import { honeypotModule } from './honeypot.js'
 import { turnstileModule } from './turnstile.js'
 import { hcaptchaModule } from './hcaptcha.js'
+import { smartcaptchaModule } from './smartcaptcha.js'
 import { rateLimitModule } from './rate-limit.js'
 import { timeCheckModule } from './time-check.js'
 
@@ -15,7 +16,7 @@ export * from './types.js'
  * 1. Rate limit (fail fast for flooding)
  * 2. Honeypot (silent reject for bots)
  * 3. Time check (fast submissions)
- * 4. CAPTCHA (Turnstile or hCaptcha)
+ * 4. CAPTCHA (Turnstile, hCaptcha или Yandex SmartCaptcha)
  */
 export async function runAntispamChecks(
   req: Request,
@@ -31,6 +32,7 @@ export async function runAntispamChecks(
     config.timeCheck.enabled && timeCheckModule,
     config.turnstile.enabled && turnstileModule,
     config.hcaptcha.enabled && hcaptchaModule,
+    config.smartcaptcha.enabled && smartcaptchaModule,
   ].filter((m): m is NonNullable<typeof m> => Boolean(m))
 
   for (const module of modules) {
@@ -64,10 +66,24 @@ export async function runAntispamChecks(
   }
 }
 
+let smartcaptchaKeyWarned = false
+
+/** Сброс флага предупреждения (для тестов). */
+export function resetSmartcaptchaWarning(): void {
+  smartcaptchaKeyWarned = false
+}
+
 /**
  * Load antispam config from environment variables
  */
 export function loadAntispamConfig(): AntispamConfig {
+  const smartcaptchaEnabled = process.env.ANTISPAM_SMARTCAPTCHA_ENABLED === 'true'
+  const smartcaptchaKey = process.env.SMARTCAPTCHA_SERVER_KEY || ''
+  // Включено без ключа: заявки не блокируем (модуль пропустит), предупреждаем один раз за процесс
+  if (smartcaptchaEnabled && !smartcaptchaKey && !smartcaptchaKeyWarned) {
+    smartcaptchaKeyWarned = true
+    console.warn('[forms-handler] ANTISPAM_SMARTCAPTCHA_ENABLED=true, но SMARTCAPTCHA_SERVER_KEY не задан: проверка SmartCaptcha пропускается')
+  }
   return {
     honeypot: {
       enabled: process.env.ANTISPAM_HONEYPOT_ENABLED !== 'false',
@@ -82,6 +98,10 @@ export function loadAntispamConfig(): AntispamConfig {
       enabled: process.env.ANTISPAM_HCAPTCHA_ENABLED === 'true',
       siteKey: process.env.HCAPTCHA_SITE_KEY || '',
       secretKey: process.env.HCAPTCHA_SECRET_KEY || '',
+    },
+    smartcaptcha: {
+      enabled: smartcaptchaEnabled,
+      serverKey: smartcaptchaKey,
     },
     rateLimit: {
       enabled: process.env.ANTISPAM_RATE_LIMIT_ENABLED !== 'false',

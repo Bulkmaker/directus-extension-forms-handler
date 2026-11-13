@@ -270,6 +270,7 @@ export default {
         honeypot: config.honeypot.enabled,
         turnstile: config.turnstile.enabled,
         hcaptcha: config.hcaptcha.enabled,
+        smartcaptcha: config.smartcaptcha.enabled,
         rateLimit: config.rateLimit.enabled,
         timeCheck: config.timeCheck.enabled,
       },

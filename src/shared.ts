@@ -1,3 +1,4 @@
+import { isIP } from 'node:net'
 import type { FormData } from './validation.js'
 
 export interface DirectusContext {
@@ -42,6 +43,19 @@ export function getClientIp(req: {
   headers: Record<string, unknown>
   socket?: { remoteAddress?: string }
 }): string {
+  // TRUSTED_CLIENT_IP_HEADER (например cf-connecting-ip): за Cloudflare Tunnel X-Real-IP и XFF
+  // указывают на контейнер cloudflared, один адрес на всех посетителей (общий rate-limit, неверный ip
+  // в заявке). Cloudflare сам ставит CF-Connecting-IP. Включать только там, где Directus доступен
+  // снаружи исключительно через Cloudflare, иначе заголовок подделывается. Без переменной поведение прежнее.
+  const trusted = process.env.TRUSTED_CLIENT_IP_HEADER?.trim().toLowerCase()
+  if (trusted) {
+    const raw = req.headers[trusted]
+    const value = (Array.isArray(raw) ? String(raw[0] ?? '') : typeof raw === 'string' ? raw : '').trim()
+    if (value && isIP(value)) {
+      return value
+    }
+  }
+
   // Traefik проставляет X-Real-IP = реальный клиентский адрес (trusted proxy).
   // Доверяем ему как первичному источнику — он не контролируется клиентом,
   // т.к. Traefik перезаписывает заголовок на входе. Это и есть стабильный
@@ -206,6 +220,7 @@ export function getFormTypeLabel(data: FormData): string {
 
 /** Known/technical fields excluded from custom fields display */
 const KNOWN_FIELDS = new Set([
+  '_smartcaptcha',
   'name',
   'client_name',
   'phone',

@@ -12,6 +12,7 @@ const antispamSchema = z.object({
   _honeypot: z.string().max(0).optional(),
   _turnstile: z.string().optional(),
   _hcaptcha: z.string().optional(),
+  _smartcaptcha: z.string().optional(),
   _loadTime: z.number().optional(),
 })
 
