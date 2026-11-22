@@ -149,7 +149,7 @@ const CONTACT_KEYS = new Set([
   'message', 'request_message', 'estimate_summary', 'estimate_payload',
   'agree', 'privacy_consent', 'consent',
   'calculator_data', 'calculator_payload',
-  'project_attachments', '_honeypot', '_loadTime', 'website',
+  'project_attachments', '_honeypot', '_loadTime', '_smartcaptcha', 'website',
 ])
 
 /** Ключи, которые идут в блок «Источник», а не в детали заявки. */

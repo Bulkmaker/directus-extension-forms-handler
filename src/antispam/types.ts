@@ -32,6 +32,10 @@ export interface AntispamConfig {
     siteKey: string
     secretKey: string
   }
+  smartcaptcha: {
+    enabled: boolean
+    serverKey: string
+  }
   rateLimit: {
     enabled: boolean
     maxRequests: number
@@ -51,6 +55,7 @@ export interface FormDataWithAntispam {
   _honeypot?: string
   _turnstile?: string
   _hcaptcha?: string
+  _smartcaptcha?: string
   _loadTime?: number
 
   // Regular form fields
